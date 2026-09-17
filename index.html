@@ -130,7 +130,7 @@
     const list = document.getElementById("list");
     const KEY_CATS = "vn-cats";
     const KEY_NOTES = "vn-notes";
-    let rec = null, live = false, lock = "", picked = "";
+    let rec = null, live = false, lock = "", picked = "", lastFinal = "", replayGuard = false;
     const cats = () => JSON.parse(localStorage.getItem(KEY_CATS) || "[]");
     const notes = () => JSON.parse(localStorage.getItem(KEY_NOTES) || "[]");
     const setCats = (a) => localStorage.setItem(KEY_CATS, JSON.stringify(a));
@@ -201,7 +201,7 @@
       n.unshift({ id: Date.now(), cat, text, when: new Date().toLocaleString() });
       setNotes(n);
       panel.classList.remove("show");
-      lock = ""; out.value = "";
+      lock = ""; lastFinal = ""; replayGuard = false; out.value = "";
       state.textContent = "Saved in “" + cat + "”";
       renderList(); renderChips();
     }
@@ -213,13 +213,26 @@
       rec.interimResults = true;
       rec.lang = navigator.language || "en-US";
       rec.onresult = (e) => {
+        let finals = [];
         let interim = "";
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const t = e.results[i][0].transcript;
-          if (e.results[i].isFinal) lock += t + " ";
-          else interim += t;
+        for (let i = 0; i < e.results.length; i++) {
+          const t = (e.results[i][0].transcript || "").replace(/\s+/g, " ").trim();
+          if (!t) continue;
+          if (e.results[i].isFinal) {
+            if (t !== finals[finals.length - 1]) finals.push(t);
+          } else {
+            interim += (interim ? " " : "") + t;
+          }
         }
-        out.value = (lock + interim).trim();
+        if (replayGuard) {
+          if (finals.length && lastFinal && finals[0] === lastFinal) finals.shift();
+          if (interim && lastFinal && interim === lastFinal) interim = "";
+          if (finals.length || interim) replayGuard = false;
+        }
+        if (interim && finals.length && interim === finals[finals.length - 1]) interim = "";
+        const piece = finals.join(" ");
+        if (finals.length) lastFinal = finals[finals.length - 1];
+        out.value = (lock + (piece ? piece + " " : "") + interim).replace(/\s+/g, " ").trim();
         out.scrollTop = out.scrollHeight;
       };
       rec.onerror = (e) => {
@@ -228,13 +241,20 @@
         }
         if (e.error === "not-allowed") setLive(false);
       };
-      rec.onend = () => { if (live) { try { rec.start(); } catch (_) {} } };
+      rec.onend = () => {
+        const shown = (out.value || "").replace(/\s+/g, " ").trim();
+        lock = shown ? shown + " " : "";
+        replayGuard = true;
+        if (live) { try { rec.start(); } catch (_) {} }
+      };
     }
     mic.onclick = () => {
       warn.textContent = "";
       if (!rec) return;
       if (!live) {
-        lock = out.value ? out.value + " " : "";
+        lock = out.value ? out.value.replace(/\s+/g, " ").trim() + " " : "";
+        lastFinal = "";
+        replayGuard = false;
         try { rec.start(); setLive(true); } catch (err) { warn.textContent = String(err); }
       } else {
         setLive(false);
@@ -249,7 +269,7 @@
       await navigator.clipboard.writeText(out.value);
       state.textContent = "Copied";
     };
-    document.getElementById("clear").onclick = () => { lock = ""; out.value = ""; };
+    document.getElementById("clear").onclick = () => { lock = ""; lastFinal = ""; replayGuard = false; out.value = ""; };
     renderList();
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   </script>
