@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VoiceNote" />
+  <title>VoiceNote</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #141c2e;
+      --line: #243049;
+      --text: #e8eefc;
+      --muted: #8b9bb8;
+      --accent: #5eead4;
+      --danger: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body { padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); }
+    h1 { font-size: 1.15rem; margin: 0 0 4px; font-weight: 650; }
+    .sub { color: var(--muted); font-size: .85rem; margin-bottom: 14px; }
+    .status {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: .8rem; color: var(--muted); margin-bottom: 14px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #64748b; }
+    .dot.live { background: var(--danger); box-shadow: 0 0 0 6px rgba(251,113,133,.15); }
+    .mic {
+      width: 100%; height: 80px; border: 0; border-radius: 18px;
+      background: #1b2740; color: var(--text); font-size: 1.05rem; font-weight: 600;
+    }
+    .mic.live { background: #3f1d2a; color: #fecdd3; }
+    textarea {
+      width: 100%; min-height: 160px; margin-top: 14px; padding: 14px;
+      border-radius: 14px; border: 1px solid var(--line); background: var(--card);
+      color: var(--text); font-size: 1.05rem; line-height: 1.45; resize: vertical;
+    }
+    input[type="text"] {
+      width: 100%; height: 44px; padding: 0 12px; border-radius: 12px;
+      border: 1px solid var(--line); background: var(--card); color: var(--text);
+      font-size: 1rem;
+    }
+    .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    button.sec, button.pri {
+      flex: 1; min-width: 90px; height: 44px; border-radius: 12px; font-size: .95rem;
+    }
+    button.sec {
+      border: 1px solid var(--line); background: transparent; color: var(--text);
+    }
+    button.pri {
+      border: 0; background: #134e4a; color: var(--accent); font-weight: 600;
+    }
+    .panel {
+      display: none; margin-top: 14px; padding: 14px;
+      border: 1px solid var(--line); border-radius: 14px; background: var(--card);
+    }
+    .panel.show { display: block; }
+    .panel h2 { margin: 0 0 10px; font-size: .95rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .chip {
+      border: 1px solid var(--line); background: #1b2740; color: var(--text);
+      border-radius: 999px; padding: 8px 12px; font-size: .85rem;
+    }
+    .chip.on { border-color: var(--accent); color: var(--accent); }
+    .warn { color: #fbbf24; font-size: .8rem; margin-top: 10px; }
+    .cat {
+      margin-top: 18px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    }
+    .cat-h {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; background: #10182a;
+    }
+    .cat-h strong { flex: 1; font-size: .95rem; }
+    .cat-h button {
+      width: 36px; height: 32px; border: 1px solid var(--line);
+      background: transparent; color: var(--muted); border-radius: 8px;
+    }
+    .note {
+      padding: 12px; border-top: 1px solid var(--line);
+      font-size: .92rem; white-space: pre-wrap;
+    }
+    .note time { display: block; color: var(--muted); font-size: .75rem; margin-bottom: 6px; }
+    .empty { color: var(--muted); font-size: .85rem; padding: 12px; }
+  </style>
+</head>
+<body>
+  <h1>VoiceNote</h1>
+  <p class="sub">Stop recording → pick or create a category → save. Categories stay in the order you set.</p>
+  <div class="status"><span class="dot" id="dot"></span><span id="state">Ready</span></div>
+  <button class="mic" id="mic" type="button">Start listening</button>
+  <textarea id="out" placeholder="Transcript appears here…"></textarea>
+  <div class="row">
+    <button class="sec" id="copy" type="button">Copy</button>
+    <button class="pri" id="saveOpen" type="button">Save to category</button>
+    <button class="sec" id="clear" type="button">Clear</button>
+  </div>
+  <div class="panel" id="panel">
+    <h2>Save this transcript</h2>
+    <div class="chips" id="chips"></div>
+    <input id="newCat" type="text" placeholder="Or type a new category name" />
+    <div class="row">
+      <button class="pri" id="confirm" type="button">Save here</button>
+      <button class="sec" id="cancel" type="button">Cancel</button>
+    </div>
+  </div>
+  <p class="warn" id="warn"></p>
+  <div id="list"></div>
+  <script>
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const mic = document.getElementById("mic");
+    const out = document.getElementById("out");
+    const state = document.getElementById("state");
+    const dot = document.getElementById("dot");
+    const warn = document.getElementById("warn");
+    const panel = document.getElementById("panel");
+    const chips = document.getElementById("chips");
+    const newCat = document.getElementById("newCat");
+    const list = document.getElementById("list");
+    const KEY_CATS = "vn-cats";
+    const KEY_NOTES = "vn-notes";
+    let rec = null, live = false, lock = "", picked = "";
+    const cats = () => JSON.parse(localStorage.getItem(KEY_CATS) || "[]");
+    const notes = () => JSON.parse(localStorage.getItem(KEY_NOTES) || "[]");
+    const setCats = (a) => localStorage.setItem(KEY_CATS, JSON.stringify(a));
+    const setNotes = (a) => localStorage.setItem(KEY_NOTES, JSON.stringify(a));
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    }
+    function setLive(on) {
+      live = on;
+      mic.textContent = on ? "Stop" : "Start listening";
+      mic.classList.toggle("live", on);
+      dot.classList.toggle("live", on);
+      state.textContent = on ? "Listening…" : "Ready";
+    }
+    function renderChips() {
+      const c = cats();
+      chips.innerHTML = c.length
+        ? c.map(name => `<button type="button" class="chip${name === picked ? " on" : ""}" data-cat="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")
+        : `<span class="empty" style="padding:0">No categories yet — type a name below.</span>`;
+      chips.querySelectorAll(".chip").forEach(btn => {
+        btn.onclick = () => { picked = btn.dataset.cat; newCat.value = ""; renderChips(); };
+      });
+    }
+    function renderList() {
+      const order = cats();
+      const all = notes();
+      const used = new Set(order);
+      const extra = [...new Set(all.map(n => n.cat).filter(c => c && !used.has(c)))];
+      const full = order.concat(extra);
+      if (!full.length && !all.length) { list.innerHTML = ""; return; }
+      list.innerHTML = full.map((cat, i) => {
+        const items = all.filter(n => n.cat === cat);
+        const body = items.length
+          ? items.map(n => `<article class="note"><time>${escapeHtml(n.when)}</time>${escapeHtml(n.text)}</article>`).join("")
+          : `<div class="empty">No notes in this category yet.</div>`;
+        return `<section class="cat"><div class="cat-h"><strong>${escapeHtml(cat)}</strong>
+          <button type="button" data-move="${i}" data-dir="-1">↑</button>
+          <button type="button" data-move="${i}" data-dir="1">↓</button></div>${body}</section>`;
+      }).join("");
+      list.querySelectorAll("[data-move]").forEach(btn => {
+        btn.onclick = () => moveCat(+btn.dataset.move, +btn.dataset.dir);
+      });
+    }
+    function moveCat(i, dir) {
+      const c = cats();
+      const j = i + dir;
+      if (j < 0 || j >= c.length) return;
+      [c[i], c[j]] = [c[j], c[i]];
+      setCats(c); renderList(); renderChips();
+    }
+    function openPanel() {
+      if (!out.value.trim()) { warn.textContent = "Nothing to save yet."; return; }
+      warn.textContent = "";
+      picked = cats()[0] || "";
+      newCat.value = "";
+      renderChips();
+      panel.classList.add("show");
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    function saveNote() {
+      const text = out.value.trim();
+      if (!text) return;
+      let cat = newCat.value.trim() || picked;
+      if (!cat) { warn.textContent = "Pick a category or type a new one."; return; }
+      const c = cats();
+      if (!c.includes(cat)) { c.push(cat); setCats(c); }
+      const n = notes();
+      n.unshift({ id: Date.now(), cat, text, when: new Date().toLocaleString() });
+      setNotes(n);
+      panel.classList.remove("show");
+      lock = ""; out.value = "";
+      state.textContent = "Saved in “" + cat + "”";
+      renderList(); renderChips();
+    }
+    if (!Speech) {
+      warn.textContent = "This browser has no SpeechRecognition. Use Chrome on Android or Safari on iPhone over HTTPS.";
+    } else {
+      rec = new Speech();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = navigator.language || "en-US";
+      rec.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) lock += t + " ";
+          else interim += t;
+        }
+        out.value = (lock + interim).trim();
+        out.scrollTop = out.scrollHeight;
+      };
+      rec.onerror = (e) => {
+        if (e.error !== "no-speech" && e.error !== "aborted") {
+          warn.textContent = "Mic error: " + e.error + (e.error === "network" ? " — browser speech usually needs a connection." : "");
+        }
+        if (e.error === "not-allowed") setLive(false);
+      };
+      rec.onend = () => { if (live) { try { rec.start(); } catch (_) {} } };
+    }
+    mic.onclick = () => {
+      warn.textContent = "";
+      if (!rec) return;
+      if (!live) {
+        lock = out.value ? out.value + " " : "";
+        try { rec.start(); setLive(true); } catch (err) { warn.textContent = String(err); }
+      } else {
+        setLive(false);
+        rec.stop();
+        openPanel();
+      }
+    };
+    document.getElementById("saveOpen").onclick = openPanel;
+    document.getElementById("confirm").onclick = saveNote;
+    document.getElementById("cancel").onclick = () => panel.classList.remove("show");
+    document.getElementById("copy").onclick = async () => {
+      await navigator.clipboard.writeText(out.value);
+      state.textContent = "Copied";
+    };
+    document.getElementById("clear").onclick = () => { lock = ""; out.value = ""; };
+    renderList();
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  </script>
+</body>
+</html>
