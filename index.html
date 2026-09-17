@@ -117,6 +117,7 @@
   </div>
   <p class="warn" id="warn"></p>
   <div id="list"></div>
+  <script src="transcript-model.js"></script>
   <script>
     const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
     const mic = document.getElementById("mic");
@@ -130,7 +131,8 @@
     const list = document.getElementById("list");
     const KEY_CATS = "vn-cats";
     const KEY_NOTES = "vn-notes";
-    let rec = null, live = false, lock = "", picked = "", lastFinal = "", replayGuard = false;
+    const isPhone = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent || "");
+    let rec = null, live = false, committed = "", lastChunk = "", sessionFinals = [], recGen = 0, picked = "";
     const cats = () => JSON.parse(localStorage.getItem(KEY_CATS) || "[]");
     const notes = () => JSON.parse(localStorage.getItem(KEY_NOTES) || "[]");
     const setCats = (a) => localStorage.setItem(KEY_CATS, JSON.stringify(a));
@@ -201,64 +203,85 @@
       n.unshift({ id: Date.now(), cat, text, when: new Date().toLocaleString() });
       setNotes(n);
       panel.classList.remove("show");
-      lock = ""; lastFinal = ""; replayGuard = false; out.value = "";
+      resetBuffers();
+      out.value = "";
       state.textContent = "Saved in “" + cat + "”";
       renderList(); renderChips();
     }
-    if (!Speech) {
-      warn.textContent = "This browser has no SpeechRecognition. Use Chrome on Android or Safari on iPhone over HTTPS.";
-    } else {
+    function resetBuffers() {
+      committed = "";
+      lastChunk = "";
+      sessionFinals = [];
+    }
+    function paintOut(interim) {
+      out.value = VNTranscript.paint(committed, sessionFinals, interim, lastChunk);
+      out.scrollTop = out.scrollHeight;
+    }
+    function commitSession() {
+      const next = VNTranscript.commitFinals(committed, sessionFinals, lastChunk);
+      committed = next.committed;
+      lastChunk = next.lastChunk;
+      sessionFinals = [];
+      paintOut("");
+    }
+    function killRecognition() {
+      recGen += 1;
+      const current = rec;
+      rec = null;
+      if (current) { try { current.stop(); } catch (_) {} }
+    }
+    function startRecognition() {
+      const myGen = ++recGen;
       rec = new Speech();
-      rec.continuous = true;
+      rec.continuous = !isPhone;
       rec.interimResults = true;
       rec.lang = navigator.language || "en-US";
       rec.onresult = (e) => {
-        let finals = [];
+        if (myGen !== recGen) return;
+        sessionFinals = [];
         let interim = "";
         for (let i = 0; i < e.results.length; i++) {
-          const t = (e.results[i][0].transcript || "").replace(/\s+/g, " ").trim();
+          const t = VNTranscript.norm(e.results[i][0].transcript);
           if (!t) continue;
           if (e.results[i].isFinal) {
-            if (t !== finals[finals.length - 1]) finals.push(t);
+            if (t !== sessionFinals[sessionFinals.length - 1]) sessionFinals.push(t);
           } else {
             interim += (interim ? " " : "") + t;
           }
         }
-        if (replayGuard) {
-          if (finals.length && lastFinal && finals[0] === lastFinal) finals.shift();
-          if (interim && lastFinal && interim === lastFinal) interim = "";
-          if (finals.length || interim) replayGuard = false;
-        }
-        if (interim && finals.length && interim === finals[finals.length - 1]) interim = "";
-        const piece = finals.join(" ");
-        if (finals.length) lastFinal = finals[finals.length - 1];
-        out.value = (lock + (piece ? piece + " " : "") + interim).replace(/\s+/g, " ").trim();
-        out.scrollTop = out.scrollHeight;
+        paintOut(interim);
       };
       rec.onerror = (e) => {
+        if (myGen !== recGen) return;
         if (e.error !== "no-speech" && e.error !== "aborted") {
           warn.textContent = "Mic error: " + e.error + (e.error === "network" ? " — browser speech usually needs a connection." : "");
         }
         if (e.error === "not-allowed") setLive(false);
       };
       rec.onend = () => {
-        const shown = (out.value || "").replace(/\s+/g, " ").trim();
-        lock = shown ? shown + " " : "";
-        replayGuard = true;
-        if (live) { try { rec.start(); } catch (_) {} }
+        if (myGen !== recGen) return;
+        commitSession();
+        if (live) {
+          try { startRecognition(); } catch (_) {}
+        }
       };
+      rec.start();
+    }
+    if (!Speech) {
+      warn.textContent = "This browser has no SpeechRecognition. Use Chrome on Android or Safari on iPhone over HTTPS.";
     }
     mic.onclick = () => {
       warn.textContent = "";
-      if (!rec) return;
+      if (!Speech) return;
       if (!live) {
-        lock = out.value ? out.value.replace(/\s+/g, " ").trim() + " " : "";
-        lastFinal = "";
-        replayGuard = false;
-        try { rec.start(); setLive(true); } catch (err) { warn.textContent = String(err); }
+        committed = VNTranscript.norm(out.value);
+        lastChunk = "";
+        sessionFinals = [];
+        try { startRecognition(); setLive(true); } catch (err) { warn.textContent = String(err); }
       } else {
         setLive(false);
-        rec.stop();
+        killRecognition();
+        commitSession();
         openPanel();
       }
     };
@@ -269,9 +292,11 @@
       await navigator.clipboard.writeText(out.value);
       state.textContent = "Copied";
     };
-    document.getElementById("clear").onclick = () => { lock = ""; lastFinal = ""; replayGuard = false; out.value = ""; };
+    document.getElementById("clear").onclick = () => { resetBuffers(); out.value = ""; };
     renderList();
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").then((reg) => { try { reg.update(); } catch (_) {} }).catch(() => {});
+    }
   </script>
 </body>
 </html>
